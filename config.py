@@ -22,6 +22,11 @@ class Settings:
 
     CACHE = join(dirname(abspath(__file__)), 'dynamic.db')
     
+    # Backward compatibility defaults for existing users updating the addon
+    exclude_decks = []
+    shuffle_clozes = True
+    shortcut_exclude_deck = "Ctrl+D"
+    
     def __init__(self, addon_manager: AddonManager, module_name: str, debug: bool = False):
         self.setattr_nowrite('_addon_manager', addon_manager)
         self.setattr_nowrite('_module_name', module_name)
