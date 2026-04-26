@@ -2,13 +2,14 @@
 
 from aqt.qt import *
 
-PLATFORMS = ["Mistral AI (Mistral)", "Gemini (Google)"]
+PLATFORMS = ["Mistral AI (mistral-large-latest)", "Google Gemini (gemini-3-pro-preview)"]
+PROMPTS = ["SuperMemo (High Structural Variety)", "Original (Subtle Rewording)"]
 
 class Ui_Dialog(object):
     def setupUi(self, Dialog: QDialog):
         if not Dialog.objectName():
             Dialog.setObjectName(u"Dialog")
-        Dialog.resize(480, 750)
+        Dialog.resize(550, 850)
         
         self.mainLayout = QVBoxLayout(Dialog)
         
@@ -52,29 +53,55 @@ class Ui_Dialog(object):
         self.llmForm = QFormLayout()
         
         self.platformSelect = QComboBox()
-        self.platformSelect.addItems(PLATFORMS)
-        self.llmForm.addRow(u"Platform", self.platformSelect)
+        self.platformSelect.addItems(["Mistral AI", "Google Gemini"])
+        self.llmForm.addRow(u"AI Platform", self.platformSelect)
         
         self.APIKeyLineEdit = QLineEdit()
         self.llmForm.addRow(u"API key", self.APIKeyLineEdit)
         
+        self.modelHBox = QHBoxLayout()
         self.modelLineEdit = QLineEdit()
-        self.llmForm.addRow(u"Model", self.modelLineEdit)
+        self.modelHBox.addWidget(self.modelLineEdit)
+        self.validateModelButton = QPushButton(u"Validate Model")
+        self.modelHBox.addWidget(self.validateModelButton)
+        self.llmForm.addRow(u"Model", self.modelHBox)
         
         self.maxRendersLineEdit = QLineEdit()
         self.llmForm.addRow(u"Max renders", self.maxRendersLineEdit)
         
-        self.textEdit = QTextEdit()
-        self.textEdit.setMinimumHeight(150)
-        self.llmForm.addRow(u"Context", self.textEdit)
+        self.scrollLayout.addLayout(self.llmForm)
+
+        # Prompt Section
+        self.scrollLayout.addWidget(QLabel(u"<b>Prompt Configuration</b>"))
+        self.promptForm = QFormLayout()
+
+        self.templateSelect = QComboBox()
+        self.templateSelect.addItems(PROMPTS)
+        self.promptForm.addRow(u"Load Template", self.templateSelect)
+
+        self.scrollLayout.addLayout(self.promptForm)
+
+        # Shuffle Cloze Toggle
+        self.shuffleDeletionsCheckBox = QCheckBox(u"Require LLM to shuffle the order of cloze deletions")
+        self.scrollLayout.addWidget(self.shuffleDeletionsCheckBox)
         
+        self.shuffleExplanation = QLabel(u"<small>If enabled, Python will pre-shuffle your clozes and force the AI to build the sentence around that new sequence. This helps break visual pattern-matching for cards with multiple deletions.</small>")
+        self.shuffleExplanation.setWordWrap(True)
+        self.shuffleExplanation.setStyleSheet("color: gray;")
+        self.scrollLayout.addWidget(self.shuffleExplanation)
+        
+        self.textEdit = QTextEdit()
+        self.textEdit.setMinimumHeight(300)
+        self.scrollLayout.addWidget(QLabel(u"Current Context Prompt:"))
+        self.scrollLayout.addWidget(self.textEdit)
+        
+        self.configForm = QFormLayout()
         self.retryCountLineEdit = QLineEdit()
-        self.llmForm.addRow(u"Retry count", self.retryCountLineEdit)
+        self.configForm.addRow(u"Retry count", self.retryCountLineEdit)
         
         self.retryDelayLineEdit = QLineEdit()
-        self.llmForm.addRow(u"Retry delay (sec)", self.retryDelayLineEdit)
-        
-        self.scrollLayout.addLayout(self.llmForm)
+        self.configForm.addRow(u"Retry delay (sec)", self.retryDelayLineEdit)
+        self.scrollLayout.addLayout(self.configForm)
 
         # Review Section
         self.scrollLayout.addWidget(QLabel(u"<b>Review Behavior</b>"))

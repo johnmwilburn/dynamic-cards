@@ -9,7 +9,7 @@ This extension currently relies upon either **Mistral AI** or **Google Gemini** 
 serving new content. Please keep usage agreements and rate limits in mind.
 
 > [!WARNING]
-> This has only been tested on a Windows 11 machine with PyQt6. It is possible
+> This has only been tested on a Windows 11 machine and a macOS machine with PyQt6. It is possible
 > that UI windows for this extension look subpar on other systems. If this
 > plugin is indeed broken for other systems, please raise an issue on GitHub
 > (see **Bugs and other issues** below).
@@ -28,26 +28,23 @@ There are some critical steps that need to be done before this extension may
 be used.
 
 1. **Create an API key:** Create a free account at
-   [Mistral AI](https://console.mistral.ai/) or [Google Gemini](https://gemini.google.com)
+   [Mistral AI](https://console.mistral.ai/) or [Google AI Studio (Gemini)](https://aistudio.google.com/)
    to get started. Follow the appropriate instructions to create a **free** API key.
-   (This also works with paid keys if you've got the funds!)
 2. **Paste the API key into the extension.** Navigate to the *Tools > Dynamic
    Cards* window in Anki. Then, paste your API key into the *API key*
-   field. Make sure the *Platform* dropdown is set to the appropriate service
-   (Mistral or Google for now).
-3. That's it! **The plugin should begin working immediately without further
+   field. Make sure the *AI Platform* dropdown is set to the appropriate service.
+3. **Validate your Model:** Select the platform, enter an appropriate model (e.g., `gemini-3-pro-preview` or `mistral-large-latest`) and click **Validate Model** to ensure your API key and model name are correct.
+4. That's it! **The plugin should begin working immediately without further
    action; changes will initially be subtle. Enjoy your dynamic cards!**
 
 > [!IMPORTANT]
-> If you see a tooltip (pop-up) saying 'Unauthorized', there is a problem with
-> your API key. Please try again or raise an issue on GitHub (see **Bugs and
-> other issues**) if that doesn't work.
+> If you see a tooltip (pop-up) saying 'Validation failed', there is a problem with
+> your API key or the model you selected. Please try again or raise an issue on GitHub.
 
 > [!WARNING]
 > This extension might not work with certain types of cards, but should work
 > with Basic, Cloze, and other note types that have the question text in their
 > first field. This has been tested on AnKing and Miledown decks, for instance.
-> Please raise an issue if you find a bug; see **Bugs and other issues** below.
 
 ### Normal operation
 
@@ -56,57 +53,44 @@ new "rewording" is generated in the background for next time (until the maximum
 number of rewordings are reached). The extension therefore operates as follows:
 
 * The first time you see a card, you will see the original wording.
-* The second time you see a card, you will see a different rewording.
+* A background task will request a reworded variant from the LLM.
 * Upon subsequent reviews of a card, one of any of the previous rewordings
   (or a new rewording) may be selected for display.
-
-Do note that this extension uses an LLM and is subject to mistakes; cards might
-not always look right. See **The Settings menu** subsection for what to do in
-order to remove a poor rewording of a card from memory.
 
 ### The Settings menu
 
 The Settings menu is the main control center of this plugin. It is accessible
-via *Tools > Dynamic Cards.* The below bulletpoints describe all current
-settings within the Settings menu.
+via *Tools > Dynamic Cards.*
 
-* **Clear current card from cache:** If the LLM outputs a card whose wording
-  doesn't quite make sense, press the corresponding hotkey to reset the
-  wording of that specific card.
-* **Clear all cards from cache:** Same as above, but do so for all cards.
-* **Exclude/include current note type:** If you come across a card during
-  your review whose note type is not amenable to dynamic generation (for
-  example, Image Occlusion cards do not often have text to reword), hit this
-  hotkey during your review to tell Dynamic Cards to not generate
-  unnecessary rewordings for this note type.
-* **Pause dynamic card generation:** Temporaeily stop the generation of
-  dynamic cards by pressing this hotkey during review. Press the hotkey
-  again to resume dynamic card generation.
-* **Platform:** The platform hosting the model you're using.
+#### Keyboard Shortcuts
+* **Clear current card from cache:** Reset the wording of the specific card currently being viewed.
+* **Clear all cards from cache:** Clear all dynamically generated text from the database.
+* **Exclude/include current note type:** Stop dynamic generation for the note type of the current card.
+* **Exclude/include current deck:** Stop dynamic generation for the entire deck of the current card (includes sub-decks).
+* **Pause dynamic card generation:** Temporarily pause generation for all cards.
+
+#### LLM Functionality
+* **AI Platform:** The platform hosting the model you're using (Mistral or Gemini).
 * **API key:** The API key to allow access to your platform's API.
-* **Model:** The model to use to generate card rewordings.
-* **Max renders:** The maximum number of alternative "versions" of a card to
-  hold. The default is `3` to balance storage use with a healthy variety of
-  cards. Increasing this will increase the number of rewordings of cards
-  available to you.
-* **Context:** Instructions fed to the LLM to generate rewordings for cards.
-  If the model is misbehaving, try rewording the context to suit your needs.
-* **Retry count:** If generating a cloze-style note and the model outputs
-  an invalid result (sometimes the case), retry for this many tries. Note
-  that this will slow down the application but will reduce the number of
-  observed errors from LLM outputs.
-* **Retry delay (sec):** When redoing generations, wait this many seconds
-  before retrying. Note that this is often necessary to avoid being
-  rate-limited by LLM APIs; this has therefore been set to 1.0 seconds by
-  default.
-* **Clear cache on review end:** By default, any card rewordings that
-  you create are preserved even after you stop reviewing. Check this option
-  to clear all rewordings once you stop a review session.
-* **Excluded note types:** A list of all note types that have been excluded
-  so far. Double-click any note type to remove it from the list (and thus
-  resume dynamic generation again for it).
+* **Model:** The model name to use (e.g., `gemini-3-pro-preview`).
+* **Validate Model:** A button to test your API key and model combination.
+* **Max renders:** The maximum number of alternative "versions" of a card to hold. Default is `3`.
+
+#### Prompt Configuration
+* **Load Template:** Choose between pre-built prompts, like the strict "SuperMemo" template or the "Original" subtle rewording template.
+* **Require LLM to shuffle the order of cloze deletions:** If enabled, the extension will randomly shuffle your `{{c1::...}}` tags and force the AI to rebuild the sentence around the new order, breaking visual patterns.
+* **Context:** Instructions fed to the LLM to generate rewordings. You can fully customize this.
+* **Retry count & delay:** Configures how many times the extension will retry generating a card if validation fails, and how long to wait between attempts to avoid rate limits.
+
+#### Exclusions
+* **Clear cache on review end:** Automatically clear all generated text when closing the reviewer.
+* **Excluded Note Types / Decks:** Lists of all excluded types and decks. Double-click any item to remove it from the exclusion list.
+
+## Technical Cards & Safety Valve
+
+If you use the **SuperMemo** prompt template, the AI is instructed with a **Safety Valve**: if a card contains technical code, CLI commands, or formulas where rewording would break accuracy, the AI will silently decline to reword it, ensuring your technical cards remain 100% accurate.
 
 ## Bugs and other issues
 
 Found a bug? Please raise an issue so I can see it! Contributions are also
-welcome.
+welcome. Note that manual layout modifications were made to `ui/settings.py` to support the scroll area; compiling from the `.ui` file may overwrite these changes.

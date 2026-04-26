@@ -7,11 +7,12 @@ from aqt.utils import tooltip as tooltip_aqt
 from anki.cards import Card
 from anki.notes import Note
 from anki.template import TemplateRenderOutput
-from random import choice
+from random import choice, shuffle
 import requests
 import json
 import re
 import time
+import random
 from os.path import join, dirname, abspath
 
 # Multitasking
@@ -363,18 +364,32 @@ def clear_cache_on_editor_load_note(e: Editor):
     # if mw.reviewer.card is not None:
     #     mw.reviewer._redraw_current_card()
 
-# Find all cloze matches of a given ord in a cloze card.
-# Case insensitive.
-def get_cloze_matches(curr_qtext, ord) -> list[str]:
-    pattern = r'{{c' + str(ord + 1) + r'.+?}}'
-    return re.findall(pattern, curr_qtext, flags=re.RegexFlag.IGNORECASE)
+# Find all cloze matches in a cloze card.
+def get_all_cloze_tags(text: str) -> list[str]:
+    return re.findall(r'{{c\d+::.*?}}', text)
 
-# Ensure all cloze deletions are in curr_qtext.
-# Case insensitive.
-def validate_cloze(curr_qtext: str, cloze_deletions: list[Optional[str]]) -> bool:
-    for cloze_deletion in cloze_deletions:
-        if cloze_deletion.lower() not in curr_qtext.lower():
-            return False
+# Ensure all cloze deletions are intact and valid.
+def validate_cloze(reworded: str, original: str) -> bool:
+    # 1. Ensure all unique cloze tags from original are present in reworded
+    original_tags = set(get_all_cloze_tags(original))
+    reworded_tags = set(get_all_cloze_tags(reworded))
+    
+    if not original_tags.issubset(reworded_tags):
+        return False
+        
+    # 2. Check for balanced braces
+    if reworded.count("{{") != reworded.count("}}"):
+        return False
+        
+    # 3. Check for unclosed tags at the end
+    if reworded.strip().endswith("{{") or "{{" in reworded.strip()[-3:]:
+         return False
+         
+    # 4. Length check: if it's significantly shorter than the original while having multiple clozes,
+    # it's likely truncated.
+    if len(reworded) < (len(original) * 0.4) and len(original_tags) > 1:
+        return False
+         
     return True
 
 def reword_note(note: Note, ord: Optional[int] = None, num_retries: int = config.settings.num_retries, reason: Optional[str] = None, existing_texts: Optional[List[str]] = None) -> str:
@@ -383,16 +398,16 @@ def reword_note(note: Note, ord: Optional[int] = None, num_retries: int = config
     curr_qtext = reworded_qtext = note.fields[0]
     curr_note_type = note.note_type()['name']
     
-    # Extract all unique cloze tags to create a required sequence
-    cloze_tags = re.findall(r'{{c\d+::.*?}}', curr_qtext)
+    # Extract all unique cloze tags to create a required sequence (if enabled)
     tag_order_instruction = ""
-    if len(set(cloze_tags)) > 1:
-        # Shuffle the unique clozes to create a target sequence
-        shuffled_tags = list(cloze_tags)
-        import random # ensure available
-        random.shuffle(shuffled_tags)
-        variants_str = " -> ".join(shuffled_tags)
-        tag_order_instruction = f"\n\nREQUIRED CLOZE SEQUENCE:\n{variants_str}"
+    if config.settings.shuffle_clozes:
+        cloze_tags = re.findall(r'{{c\d+::.*?}}', curr_qtext)
+        if len(set(cloze_tags)) > 1:
+            # Shuffle the unique clozes to create a target sequence
+            shuffled_tags = list(cloze_tags)
+            shuffle(shuffled_tags)
+            variants_str = " -> ".join(shuffled_tags)
+            tag_order_instruction = f"\n\nREQUIRED CLOZE SEQUENCE:\n{variants_str}"
 
     # Construct the prompt with existing variants to avoid duplicates
     prompt_text = curr_qtext
@@ -416,6 +431,10 @@ def reword_note(note: Note, ord: Optional[int] = None, num_retries: int = config
         else:
             raise RuntimeError(f'Unknown platform index {config.settings.platform_index} for rewording note {note.id}.')
         
+        # Safety Valve: allow model to opt-out if the card is too technical/specific
+        if "[SKIP_REWORD]" in reworded_qtext:
+            return None
+
         # Deduplication check: if the new text is a duplicate, retry.
         if existing_texts and reworded_qtext.strip() in [t.strip() for t in existing_texts]:
             time.sleep(config.settings.retry_delay_seconds)
@@ -428,9 +447,9 @@ def reword_note(note: Note, ord: Optional[int] = None, num_retries: int = config
     # If the note is cloze-adjacent, then validate it. If valid, return the note.
     # If not cloze-adjacent, skip this validation process and just return the note.
     # BUG: This ONLY goes by name. There must be a better way to validate it.
-    if 'cloze' in curr_note_type.lower() and ord is not None and not validate_cloze(reworded_qtext, get_cloze_matches(curr_qtext, ord)):
+    if 'cloze' in curr_note_type.lower() and not validate_cloze(reworded_qtext, curr_qtext):
         time.sleep(config.settings.retry_delay_seconds) # avoid rate limit ceiling
-        return reword_note(note, num_retries - 1, reason='Cloze validation failed')
+        return reword_note(note, num_retries - 1, reason='Cloze validation failed', existing_texts=existing_texts)
     return reworded_qtext
         
 def reword_text_mistral(curr_qtext: str) -> str: 
@@ -451,18 +470,14 @@ def reword_text_mistral(curr_qtext: str) -> str:
             raise requests.exceptions.RequestException(chat_response.json().get('message', f'Unspecified error ({chat_response.status_code})'))
         return chat_response.json()['choices'][0]['message']['content']
     except Exception as e:
-        # Throw an error.
-        # # print('Error with Mistral. Is your API key working?')
         raise RuntimeError(f'Error loading \'{config.settings.model}\' for dynamic Anki cards: ' + str(e))
-                          # 'You might need to check your settings to ensure correct model name, API keys, and usage limits. '
-                          # 'If this continues, disable this add-on to stop these messages.')
 
 def reword_text_gemini(curr_qtext: str) -> str: 
        
     # Try to reword the card using Gemini.
     try:
         chat_response = requests.post(
-            url=f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={config.settings.api_key}",
+            url=f"https://generativelanguage.googleapis.com/v1beta/models/{config.settings.model}:generateContent?key={config.settings.api_key}",
             headers={
                 'Content-Type': 'application/json'
             },
@@ -491,8 +506,7 @@ def reword_text_gemini(curr_qtext: str) -> str:
                     "maxOutputTokens": 1024,
                 }
             }),
-            timeout=15,
-            verify=True
+            timeout=30
         )
         
         if not (chat_response.status_code >= 200 and chat_response.status_code < 300):
@@ -708,6 +722,7 @@ def update_config_settings():
     config.settings.model = sdlg.form.modelLineEdit.text()
     config.settings.context = sdlg.form.textEdit.toPlainText()
     config.settings.clear_cache_on_reviewer_end = sdlg.form.checkBox.isChecked()
+    config.settings.shuffle_clozes = sdlg.form.shuffleDeletionsCheckBox.isChecked()
     config.settings.exclude_note_types = [sdlg.form.listWidget.item(i).text() for i in range(sdlg.form.listWidget.count())]
     config.settings.exclude_decks = [sdlg.form.listWidgetDecks.item(i).text() for i in range(sdlg.form.listWidgetDecks.count())]
     config.settings.platform_index = sdlg.form.platformSelect.currentIndex()
