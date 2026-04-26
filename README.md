@@ -72,7 +72,7 @@ via *Tools > Dynamic Cards.*
 #### LLM Functionality
 * **AI Platform:** The platform hosting the model you're using (Mistral or Gemini).
 * **API key:** The API key to allow access to your platform's API.
-* **Model:** The model name to use (e.g., `gemini-3-pro-preview`).
+* **Model:** The model name to use (e.g., `gemini-3-pro-preview`). Note that cheaper or weaker models may struggle to produce good variants while adhering to strict structural rules.
 * **Validate Model:** A button to test your API key and model combination.
 * **Max renders:** The maximum number of alternative "versions" of a card to hold. Default is `3`.
 

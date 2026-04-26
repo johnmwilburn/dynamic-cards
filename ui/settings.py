@@ -65,11 +65,6 @@ class Ui_Dialog(object):
         self.validateModelButton = QPushButton(u"Validate Model")
         self.modelHBox.addWidget(self.validateModelButton)
         self.llmForm.addRow(u"Model", self.modelHBox)
-
-        self.modelExplanation = QLabel(u"<small>Note: Weaker models may struggle to produce good variants while adhering to strict structural rules.</small>")
-        self.modelExplanation.setWordWrap(True)
-        self.modelExplanation.setStyleSheet("color: gray;")
-        self.llmForm.addRow(u"", self.modelExplanation)
         
         self.maxRendersLineEdit = QLineEdit()
         self.llmForm.addRow(u"Max renders", self.maxRendersLineEdit)
