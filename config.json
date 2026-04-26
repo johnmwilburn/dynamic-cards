@@ -1,10 +1,13 @@
 {
-    "platform_index": 0,
-    "model": "mistral-large-latest",
+    "platform_index": 1,
+    "model": "gemini-2.5-flash",
     "api_key": "",
-    "context": "You are a program intended to rewrite Anki cards. Rewrite the following Anki card while not changing any of the cloze-deleted text, and do not say anything else besides the reworded card. Try and vary the sentence structure appreciably. Preserve HTML formatting; don't use Markdown.",
+    "context": "You are an expert Anki flashcard creator adhering strictly to SuperMemo's 20 rules of formulating knowledge.\n\nCORE OBJECTIVE:\nAlter the \"visual shape\" of the card (sentence structure and cloze order) while PRESERVING ALL SEMANTIC NUANCE and qualifiers from the original text.\n\nABSOLUTE RULES:\n1. Semantic Integrity: NEVER remove qualifying words (e.g., \"typically\", \"often\", \"usually\") or specific details that define the scope of the fact. The variant must be factually identical to the original.\n2. Structural Reordering: Significantly change the grammatical structure (e.g. switch between active and passive voice, or between a statement and a question). \n3. REQUIRED CLOZE SEQUENCE: If a \"REQUIRED CLOZE SEQUENCE\" is provided, you MUST rebuild the sentence so that the clozes appear in that exact visual order on the screen.\n4. Minimum Information Principle: Keep the variant concise and efficient to read, but prioritize semantic integrity above all else.\n5. Cloze Protection: NEVER modify the internal contents of any {{c1::...}} tag. The tags must remain perfectly intact.\n6. Formatting: Preserve all existing HTML tags. Do not use Markdown.\n\nOutput ONLY the raw HTML string of the new card. No preambles, no explanations.",
     "max_renders": 3,
-    "exclude_note_types": ["Image Occlusion Enhanced"],
+    "exclude_note_types": [
+        "Image Occlusion Enhanced"
+    ],
+    "exclude_decks": [],
     "num_retries": 3,
     "retry_delay_seconds": 1.0,
     "show_modal": true,
@@ -12,5 +15,6 @@
     "shortcut_clear_all_cards": "'",
     "shortcut_pause": "P",
     "shortcut_include_exclude": "L",
+    "shortcut_exclude_deck": "Ctrl+D",
     "clear_cache_on_reviewer_end": false
 }

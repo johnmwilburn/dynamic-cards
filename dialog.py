@@ -31,6 +31,7 @@ class SettingsDialog(QDialog):
         self.form.keySequenceEdit.setKeySequence(str(self.settings.shortcut_clear_current_card))
         self.form.keySequenceEdit_2.setKeySequence(str(self.settings.shortcut_clear_all_cards))
         self.form.keySequenceEdit_3.setKeySequence(str(self.settings.shortcut_include_exclude))
+        self.form.keySequenceEdit_5.setKeySequence(str(self.settings.shortcut_exclude_deck))
         self.form.keySequenceEdit_4.setKeySequence(str(self.settings.shortcut_pause))
         self.form.APIKeyLineEdit.setText(str(self.settings.api_key))
         self.form.modelLineEdit.setText(str(self.settings.model))
@@ -44,3 +45,7 @@ class SettingsDialog(QDialog):
         # Set the excluded types.
         self.form.listWidget.clear()
         self.form.listWidget.addItems([str(item) for item in self.settings.exclude_note_types])
+
+        # Set the excluded decks.
+        self.form.listWidgetDecks.clear()
+        self.form.listWidgetDecks.addItems([str(item) for item in self.settings.exclude_decks])

@@ -12,6 +12,7 @@ import requests
 import json
 import re
 import time
+from os.path import join, dirname, abspath
 
 # Multitasking
 import queue
@@ -140,7 +141,7 @@ class RewordingWorkerQueue:
 
     # This object must be started and should start when reviewer inits (see hook)
     def __init__(self):
-        self.queue = None
+        self.queue = queue.Queue()
         self.worker_thread = None
         self.running = False
         if config.debug: tooltip('Queue initialized.')
@@ -148,7 +149,6 @@ class RewordingWorkerQueue:
     # Start the worker queue if not already started.
     def start(self):
         if not self.running:
-            self.queue = queue.Queue()
             self.running = True
             self.worker_thread = threading.Thread(target=self.worker, daemon=True)
             self.worker_thread.start()
@@ -158,17 +158,18 @@ class RewordingWorkerQueue:
     # Do so one-by-one to avoid throttling!
     def worker(self):
         while self.running:
-            if self.queue.empty():
-                time.sleep(0.5)
-            else:
-                func, args = self.queue.get()
+            try:
+                func, args = self.queue.get(timeout=1)
                 func(args)
                 self.queue.task_done()
+            except queue.Empty:
+                continue
 
     # Task helper method
     def _task_helper(self, card: Card):
         try:
-            new_text = create_new_dynamic_wording(note=card.note())
+            cne = poll_cached_note_for_card(card)
+            new_text = create_new_dynamic_wording(note=card.note(), existing_texts=cne.texts)
             if new_text is not None:
                 update_cached_note_for_card(card=card, new_text=new_text)
                 if config.debug: tooltip(f'Completed new wording task for card {card.id}.')
@@ -179,19 +180,16 @@ class RewordingWorkerQueue:
 
     # Add new tasks to the queue
     def add_render_task(self, card: Card):
+        self.start()
         self.queue.put((self._task_helper, card))
         if config.debug: tooltip(f'Queued card {card.id} for new wording task.')
 
     # Stop the queue.
-    def stop(self):
+    def stop(self, immediate=False):
         self.running = False
-        self.worker_thread.join()
-        del self.queue
-        del self.worker_thread
-        self.queue = None
-        self.worker_thread = None
+        # Don't join the thread here as it can cause Anki to hang if a network
+        # request is in progress. The thread is a daemon and will exit on its own.
         if config.debug: tooltip(f'Queue stopped.')
-        # Need to unblock?
 
     # Reset the queue and have it start running again.
     def reset(self, immediate=False):
@@ -230,7 +228,7 @@ class CachedNoteEntry:
 # Keypress event that will be used for removing faulty revisions of a card.
 class KeyPressCacheClearFilter(QObject):
     def eventFilter(self, obj: object, event: QEvent):
-        if event.type() == QEvent.KeyPress:
+        if event.type() == QEvent.Type.KeyPress:
             key_combination = event.keyCombination()
             pressed_key = QKeySequence(key_combination).toString()
             if pressed_key == config.settings.shortcut_clear_current_card:
@@ -244,10 +242,7 @@ class KeyPressCacheClearFilter(QObject):
                     mw.reviewer._redraw_current_card()
                 return True
             elif pressed_key == config.settings.shortcut_clear_all_cards:
-                if config.data:
-                    clear_cache()
-                else:
-                    tooltip('No dynamic cache to clear.')
+                clear_cache()
                 # Fix bug: hitting any cache clear keys should trigger a redraw in case card isn't drawing right
                 if mw.reviewer.card is not None:
                     mw.reviewer._redraw_current_card()
@@ -262,6 +257,8 @@ class KeyPressCacheClearFilter(QObject):
             elif pressed_key == config.settings.shortcut_include_exclude and mw.reviewer:
                 _, add_remove_fn = inject_include_exclude_option(mw.reviewer, None)
                 add_remove_fn()
+            elif pressed_key == config.settings.shortcut_exclude_deck and mw.reviewer:
+                inject_deck_include_exclude_option(mw.reviewer, None)
 
         return super().eventFilter(obj, event)
 
@@ -327,12 +324,12 @@ def update_cached_note_for_card(card: Card,
     config.data[cne.note.id] = cne
     return cne
 
-def create_new_dynamic_wording(note: Note, ord: Optional[int] = None):
+def create_new_dynamic_wording(note: Note, ord: Optional[int] = None, existing_texts: Optional[List[str]] = None):
     # print('Making a new cached render for card ' + str(card.id))
     # print('API KEY: ' + api_key)
     if config.debug: print(f'Creating new dynamic wording for note {note.id} using model \'{config.settings.model}\'')
     
-    new_text = reword_note(note, ord=ord)
+    new_text = reword_note(note, ord=ord, existing_texts=existing_texts)
     if config.debug:
         if new_text is not None: print(f'Successfully created new dynamic wording for note {note.id} using model \'{config.settings.model}\'')
         else: print(f'Unsuccessfully attempted new dynamic wording for note {note.id} using model \'{config.settings.model}\'')
@@ -380,12 +377,32 @@ def validate_cloze(curr_qtext: str, cloze_deletions: list[Optional[str]]) -> boo
             return False
     return True
 
-def reword_note(note: Note, ord: Optional[int] = None, num_retries: int = config.settings.num_retries, reason: Optional[str] = None) -> str:
+def reword_note(note: Note, ord: Optional[int] = None, num_retries: int = config.settings.num_retries, reason: Optional[str] = None, existing_texts: Optional[List[str]] = None) -> str:
 
     # Extract relevant properties from the card.
     curr_qtext = reworded_qtext = note.fields[0]
     curr_note_type = note.note_type()['name']
     
+    # Extract all unique cloze tags to create a required sequence
+    cloze_tags = re.findall(r'{{c\d+::.*?}}', curr_qtext)
+    tag_order_instruction = ""
+    if len(set(cloze_tags)) > 1:
+        # Shuffle the unique clozes to create a target sequence
+        shuffled_tags = list(cloze_tags)
+        import random # ensure available
+        random.shuffle(shuffled_tags)
+        variants_str = " -> ".join(shuffled_tags)
+        tag_order_instruction = f"\n\nREQUIRED CLOZE SEQUENCE:\n{variants_str}"
+
+    # Construct the prompt with existing variants to avoid duplicates
+    prompt_text = curr_qtext
+    avoid_instruction = ""
+    if existing_texts and len(existing_texts) > 0:
+        variants_to_avoid = "\n".join([f"- {text}" for text in set(existing_texts)])
+        avoid_instruction = f"\n\nDO NOT generate anything similar to these existing variants:\n{variants_to_avoid}"
+    
+    prompt_text = f"Original Card Text:\n{curr_qtext}{tag_order_instruction}{avoid_instruction}\n\nTask: Generate exactly ONE new, structurally distinct variation of the Original Card Text following all instructions."
+
     # If we've run out of tries, then give up.
     if num_retries < 0:
         tooltip(f'Could not properly reword note {note.id} using platform {config.settings.platform_index} (reason: {reason}). Please try again.') 
@@ -393,14 +410,20 @@ def reword_note(note: Note, ord: Optional[int] = None, num_retries: int = config
 
     try:
         if config.settings.platform_index == 0:
-            reworded_qtext = reword_text_mistral(curr_qtext)
+            reworded_qtext = reword_text_mistral(prompt_text)
         elif config.settings.platform_index == 1:
-            reworded_qtext = reword_text_gemini(curr_qtext)
+            reworded_qtext = reword_text_gemini(prompt_text)
         else:
             raise RuntimeError(f'Unknown platform index {config.settings.platform_index} for rewording note {note.id}.')
+        
+        # Deduplication check: if the new text is a duplicate, retry.
+        if existing_texts and reworded_qtext.strip() in [t.strip() for t in existing_texts]:
+            time.sleep(config.settings.retry_delay_seconds)
+            return reword_note(note, num_retries - 1, reason='Duplicate variant generated', existing_texts=existing_texts)
+
     except RuntimeError as e:
         time.sleep(config.settings.retry_delay_seconds) # avoid rate limit ceiling
-        return reword_note(note, num_retries - 1, reason=str(e))
+        return reword_note(note, num_retries - 1, reason=str(e), existing_texts=existing_texts)
     
     # If the note is cloze-adjacent, then validate it. If valid, return the note.
     # If not cloze-adjacent, skip this validation process and just return the note.
@@ -422,7 +445,8 @@ def reword_text_mistral(curr_qtext: str) -> str:
                                                        'messages': [
                                                            {'role': 'system', 'content': config.settings.context},
                                                            {'role': 'user', 'content': curr_qtext}
-                                                       ]}))
+                                                       ]}),
+                                      timeout=15)
         if not (chat_response.status_code >= 200 and chat_response.status_code < 300):
             raise requests.exceptions.RequestException(chat_response.json().get('message', f'Unspecified error ({chat_response.status_code})'))
         return chat_response.json()['choices'][0]['message']['content']
@@ -438,30 +462,44 @@ def reword_text_gemini(curr_qtext: str) -> str:
     # Try to reword the card using Gemini.
     try:
         chat_response = requests.post(
-            url=f"https://generativelanguage.googleapis.com/v1beta/models/{config.settings.model}:generateContent",
+            url=f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={config.settings.api_key}",
             headers={
-                'Content-Type': 'application/json',
-                'X-goog-api-key': config.settings.api_key
+                'Content-Type': 'application/json'
             },
             data=json.dumps({
-                'contents': [{
-                    'parts': [{'text': curr_qtext}]
-                }],
-                'system_instruction': {
-                    'parts': [{'text': config.settings.context}]
+                "system_instruction": {
+                    "parts": [
+                        {
+                            "text": config.settings.context
+                        }
+                    ]
                 },
-                'generationConfig': {
-                    'thinkingConfig': {
-                        'thinkingBudget': 0 # prefer fast models, this will error with CoT/reasoning models
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "text": curr_qtext
+                            }
+                        ]
                     }
-                }})
+                ],
+                "generationConfig": {
+                    "temperature": 0.7,
+                    "topP": 0.95,
+                    "topK": 40,
+                    "maxOutputTokens": 1024,
+                }
+            }),
+            timeout=15,
+            verify=True
         )
+        
         if not (chat_response.status_code >= 200 and chat_response.status_code < 300):
             raise requests.exceptions.RequestException(chat_response.json().get('message', f'Unspecified error ({chat_response.status_code})'))
+            
         return chat_response.json()['candidates'][0]['content']['parts'][0]['text']
     except Exception as e:
-        # Throw an error.
-        # # print('Error with Gemini. Is your API key working?')
         raise RuntimeError(f'Error loading \'{config.settings.model}\' for dynamic Anki cards: ' + str(e))
                           # 'You might need to check your settings to ensure correct model name, API keys, and usage limits. '
                           # 'If this continues, disable this add-on to stop these messages.')
@@ -486,15 +524,23 @@ def inject_rewording_on_question(text: str, card: Card, kind: str) -> str:
         # print('Last used render: %d of %d (at that time)' % (cce.last_used_render + 1, len(cce.renders)))
 
         try:
+            # Check for exclusions (Note Type or Deck)
+            curr_note_type = card.note().note_type()['name']
+            curr_deck_name = mw.col.decks.get(card.did)['name']
+            
+            # Check if current deck OR any parent deck is excluded
+            is_deck_excluded = any(curr_deck_name == excluded or curr_deck_name.startswith(excluded + "::") 
+                                   for excluded in config.settings.exclude_decks)
+
+            # Proactively queue a task if we don't have enough renders yet
+            if (not config.pause and len(cne.texts) < config.settings.max_renders and 
+                curr_note_type not in config.settings.exclude_note_types and
+                not is_deck_excluded):
+                if config.debug: print(f'Creating new render for note {cne.note.id}, current cache: ', str(cne))
+                q.add_render_task(card=card)
+
             # If the rep state hasn't changed since last time, then use the last render. Don't change.
             if cne.reps[card.ord] <= card.reps:
-
-                # Otherwise, make a new request in the background and set the new render to use.
-                if (not config.pause and len(cne.texts) < config.settings.max_renders and 
-                    card.note().note_type()['name'] not in config.settings.exclude_note_types):
-                    if config.debug: print(f'Creating new render for note {cne.note.id}, current cache: ', str(cne))
-                    q.add_render_task(card=card)
-                    
                 # Try to select a render that is different from the previous one (or just select the only one available)
                 if config.debug:
                     print('Card to inject:', card, f'(id {card.id}, ord {card.ord})')
@@ -559,6 +605,40 @@ def inject_include_exclude_option(r: Reviewer, m: QMenu) -> Tuple[QAction, Calla
         qconnect(a.triggered, fn)
     return a, fn
 
+def inject_deck_include_exclude_option(r: Reviewer, m: QMenu) -> None:
+    curr_deck_name = None
+    
+    # Strategy 1: If in reviewer, get deck from current card
+    if r and r.card:
+        curr_deck_name = mw.col.decks.get(r.card.did)['name']
+    
+    # Strategy 2: If not in reviewer, check if we are in the Deck Overview screen
+    if not curr_deck_name:
+        try:
+            # mw.col.decks.current() returns the deck currently selected in the UI
+            curr_deck_name = mw.col.decks.current()['name']
+        except:
+            pass
+
+    if not curr_deck_name:
+        if not m: tooltip("No deck selected to exclude.")
+        return
+    
+    def toggle_deck_exclusion():
+        if curr_deck_name not in config.settings.exclude_decks:
+            config.settings.exclude_decks = config.settings.exclude_decks + [curr_deck_name]
+            tooltip(f'Excluding deck \'{curr_deck_name}\' from dynamic card generation.')
+        else:
+            config.settings.exclude_decks = [x for x in config.settings.exclude_decks if x != curr_deck_name]
+            tooltip(f'Including deck \'{curr_deck_name}\' in dynamic card generation.')
+    
+    if m:
+        phrase = 'Exclude current deck' if curr_deck_name not in config.settings.exclude_decks else 'Include current deck'
+        a = m.addAction(phrase)
+        qconnect(a.triggered, toggle_deck_exclusion)
+    else:
+        toggle_deck_exclusion()
+
 def inject_clear_current_card_option(r: Reviewer, m: QMenu) -> None:
     a = m.addAction('Clear current card from cache')
     a.setShortcut(config.settings.shortcut_clear_current_card)
@@ -598,6 +678,7 @@ gui_hooks.editor_did_load_note.append(clear_cache_on_editor_load_note)
 gui_hooks.reviewer_will_show_context_menu.append(insert_separator)
 gui_hooks.reviewer_will_show_context_menu.append(inject_pause_generation_option)
 gui_hooks.reviewer_will_show_context_menu.append(inject_include_exclude_option)
+gui_hooks.reviewer_will_show_context_menu.append(inject_deck_include_exclude_option)
 gui_hooks.reviewer_will_show_context_menu.append(inject_clear_current_card_option)
 gui_hooks.reviewer_will_show_context_menu.append(inject_clear_all_cards_option)
 if config.settings.clear_cache_on_reviewer_end:
@@ -621,12 +702,14 @@ def update_config_settings():
     config.settings.shortcut_clear_current_card = sdlg.form.keySequenceEdit.keySequence().toString()
     config.settings.shortcut_clear_all_cards = sdlg.form.keySequenceEdit_2.keySequence().toString()
     config.settings.shortcut_include_exclude = sdlg.form.keySequenceEdit_3.keySequence().toString()
+    config.settings.shortcut_exclude_deck = sdlg.form.keySequenceEdit_5.keySequence().toString()
     config.settings.shortcut_pause = sdlg.form.keySequenceEdit_4.keySequence().toString()
     config.settings.api_key = sdlg.form.APIKeyLineEdit.text()
     config.settings.model = sdlg.form.modelLineEdit.text()
     config.settings.context = sdlg.form.textEdit.toPlainText()
     config.settings.clear_cache_on_reviewer_end = sdlg.form.checkBox.isChecked()
     config.settings.exclude_note_types = [sdlg.form.listWidget.item(i).text() for i in range(sdlg.form.listWidget.count())]
+    config.settings.exclude_decks = [sdlg.form.listWidgetDecks.item(i).text() for i in range(sdlg.form.listWidgetDecks.count())]
     config.settings.platform_index = sdlg.form.platformSelect.currentIndex()
 
     # Handle max render input
